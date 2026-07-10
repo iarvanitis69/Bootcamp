@@ -61,12 +61,16 @@ Useful endpoints:
 - `POST /terminals/<tid>/unflag`: sets `scenario_number` to `0` and updates `updated_on`
 - `POST /terminals/<tid>/decommission`: disables a terminal and queues it for deletion after 3 days
 - `GET /terminals/decommissioned`: lists terminals in the decommission queue
+- `GET /statistics/by-hardware`: terminal count by hardware model
+- `GET /statistics/by-state`: active/inactive terminal counts
+- `GET /statistics/by-hardware-family`: terminal count by hardware family
+- `GET /statistics/idle-distribution`: terminal count by idle-days bucket
 
 Application logs are written to stdout with timestamp, level, and message.
 
 ## Redis Caching
 
-The API uses a cache-aside pattern with Redis. `GET /terminals` is cached for 30 seconds. Cache operations are best-effort: if Redis is unavailable, the API logs the Redis error and continues by reading from MySQL.
+The API uses a cache-aside pattern with Redis. `GET /terminals` is cached for 30 seconds, and `GET /statistics/*` endpoints are cached for 60 seconds. Cache operations are best-effort: if Redis is unavailable, the API logs the Redis error and continues by reading from MySQL.
 
 Every write endpoint clears the whole application cache before returning:
 
@@ -169,6 +173,17 @@ curl -X POST http://localhost:5000/terminals/from-template \
 ```
 
 The create operation runs in a single database transaction. It validates the template, validates the merchant MID, locks the merchant's existing terminals, calculates the next TID suffix, inserts the new terminal, and returns `201 Created`.
+
+## Feature D Examples
+
+Statistics endpoints use Pandas for aggregation and Redis cache with a 60-second TTL:
+
+```bash
+curl http://localhost:5000/statistics/by-hardware
+curl http://localhost:5000/statistics/by-state
+curl http://localhost:5000/statistics/by-hardware-family
+curl http://localhost:5000/statistics/idle-distribution
+```
 
 
 ## Data Schema Check

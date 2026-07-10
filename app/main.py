@@ -6,6 +6,7 @@ from datetime import date, datetime
 from typing import Any
 
 import redis
+import pandas as pd
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
@@ -56,6 +57,10 @@ def terminal_list_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def generated_at() -> str:
+    return datetime.now().replace(microsecond=0).isoformat()
+
+
 def cache_key(name: str) -> str:
     return f"tms:{name}"
 
@@ -88,6 +93,11 @@ def clear_cache(redis_client: redis.Redis) -> None:
             logger.info("Cleared %s cache keys", len(keys))
     except Exception:
         logger.error("Redis cache clear failed", exc_info=True)
+
+
+def dataframe_from_query(query: str, params: dict[str, Any] | None = None) -> pd.DataFrame:
+    result = db.session.execute(text(query), params or {})
+    return pd.DataFrame(result.mappings().all())
 
 
 def ensure_schema() -> None:
@@ -368,6 +378,126 @@ def create_app() -> Flask:
             return jsonify(result)
         except Exception:
             logger.error("Database decommission queue query failed", exc_info=True)
+            return jsonify(error="database error"), 500
+
+    @app.get("/statistics/by-hardware")
+    def statistics_by_hardware():
+        key = cache_key("statistics:by-hardware")
+        cached = get_cached_json(redis_client, key)
+        if cached is not None:
+            return jsonify(cached)
+
+        try:
+            df = dataframe_from_query("SELECT hardware_model FROM terminals")
+            if df.empty:
+                data = []
+            else:
+                grouped = (
+                    df.fillna({"hardware_model": "Unknown"})
+                    .groupby("hardware_model")
+                    .size()
+                    .reset_index(name="count")
+                    .sort_values(["count", "hardware_model"], ascending=[False, True])
+                )
+                data = grouped.to_dict(orient="records")
+
+            result = {"generated_at": generated_at(), "data": data}
+            set_cached_json(redis_client, key, result, ttl=60)
+            return jsonify(result)
+        except Exception:
+            logger.error("Database statistics by hardware query failed", exc_info=True)
+            return jsonify(error="database error"), 500
+
+    @app.get("/statistics/by-state")
+    def statistics_by_state():
+        key = cache_key("statistics:by-state")
+        cached = get_cached_json(redis_client, key)
+        if cached is not None:
+            return jsonify(cached)
+
+        try:
+            df = dataframe_from_query("SELECT enabled FROM terminals")
+            if df.empty:
+                active = inactive = total = 0
+            else:
+                df["enabled"] = df["enabled"].astype(int)
+                active = int((df["enabled"] == 1).sum())
+                inactive = int((df["enabled"] == 0).sum())
+                total = int(len(df))
+
+            result = {
+                "generated_at": generated_at(),
+                "active": active,
+                "inactive": inactive,
+                "total": total,
+            }
+            set_cached_json(redis_client, key, result, ttl=60)
+            return jsonify(result)
+        except Exception:
+            logger.error("Database statistics by state query failed", exc_info=True)
+            return jsonify(error="database error"), 500
+
+    @app.get("/statistics/by-hardware-family")
+    def statistics_by_hardware_family():
+        key = cache_key("statistics:by-hardware-family")
+        cached = get_cached_json(redis_client, key)
+        if cached is not None:
+            return jsonify(cached)
+
+        try:
+            df = dataframe_from_query("SELECT hardware_family FROM terminals")
+            if df.empty:
+                data = []
+            else:
+                grouped = (
+                    df.fillna({"hardware_family": "Unknown"})
+                    .groupby("hardware_family")
+                    .size()
+                    .reset_index(name="count")
+                    .sort_values(["count", "hardware_family"], ascending=[False, True])
+                )
+                data = grouped.to_dict(orient="records")
+
+            result = {"generated_at": generated_at(), "data": data}
+            set_cached_json(redis_client, key, result, ttl=60)
+            return jsonify(result)
+        except Exception:
+            logger.error("Database statistics by hardware family query failed", exc_info=True)
+            return jsonify(error="database error"), 500
+
+    @app.get("/statistics/idle-distribution")
+    def statistics_idle_distribution():
+        key = cache_key("statistics:idle-distribution")
+        cached = get_cached_json(redis_client, key)
+        if cached is not None:
+            return jsonify(cached)
+
+        try:
+            df = dataframe_from_query("SELECT last_call_stamp FROM terminals")
+            bucket_order = ["Σήμερα", "1-7 μέρες", "8-30 μέρες", "31-90 μέρες", "90+ μέρες"]
+            if df.empty:
+                data = [{"range": bucket, "count": 0} for bucket in bucket_order]
+            else:
+                last_call = pd.to_datetime(df["last_call_stamp"], errors="coerce")
+                today = pd.Timestamp.now().normalize()
+                idle_days = (today - last_call.dt.normalize()).dt.days.fillna(91)
+                df["idle_bucket"] = pd.cut(
+                    idle_days,
+                    bins=[-1, 0, 7, 30, 90, float("inf")],
+                    labels=bucket_order,
+                    include_lowest=True,
+                )
+                counts = df["idle_bucket"].value_counts(sort=False)
+                data = [
+                    {"range": bucket, "count": int(counts.get(bucket, 0))}
+                    for bucket in bucket_order
+                ]
+
+            result = {"generated_at": generated_at(), "data": data}
+            set_cached_json(redis_client, key, result, ttl=60)
+            return jsonify(result)
+        except Exception:
+            logger.error("Database statistics idle distribution query failed", exc_info=True)
             return jsonify(error="database error"), 500
 
     @app.post("/terminals/from-template")
@@ -667,6 +797,10 @@ def create_app() -> Flask:
                 "/terminals/<tid>",
                 "/terminals/flagged",
                 "/terminals/decommissioned",
+                "/statistics/by-hardware",
+                "/statistics/by-state",
+                "/statistics/by-hardware-family",
+                "/statistics/idle-distribution",
             ],
         )
 
