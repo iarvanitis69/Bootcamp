@@ -207,7 +207,7 @@ The tests use fake database and Redis objects, so they do not require Docker con
 
 GitHub Actions workflows live in `.github/workflows/`.
 
-`CI` runs on pull requests and pushes to `main` or `master`. It:
+`CI` runs on pull requests, pushes to `main` or `master`, and manual runs from the GitHub Actions UI. It:
 
 1. Checks out the repository.
 2. Sets up Python 3.12.
@@ -218,7 +218,7 @@ GitHub Actions workflows live in `.github/workflows/`.
 7. Builds the `tms-api` Docker image.
 8. Builds the `tms-cleanup` Docker image.
 
-`CD` runs on pushes to `main` and can also be started manually from GitHub Actions. It:
+`CD` runs on pushes to `main` and can also be started manually from the GitHub Actions UI. It:
 
 1. Logs in to GitHub Container Registry with `GITHUB_TOKEN`.
 2. Builds and pushes the API image:
@@ -236,6 +236,14 @@ ghcr.io/<owner>/tms-cleanup:<commit-sha>
 ```
 
 The CD workflow publishes images. A real server deployment step can be added later when the target host, SSH secrets, and deployment strategy are known.
+
+Manual execution from GitHub:
+
+1. Open the repository on GitHub.
+2. Go to `Actions`.
+3. Select `CI` or `CD`.
+4. Click `Run workflow`.
+5. Select the branch and confirm `Run workflow`.
 
 ## Bonus Cron Cleanup
 
