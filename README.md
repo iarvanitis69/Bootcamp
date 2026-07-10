@@ -203,6 +203,40 @@ pytest -q
 
 The tests use fake database and Redis objects, so they do not require Docker containers to be running.
 
+## CI/CD
+
+GitHub Actions workflows live in `.github/workflows/`.
+
+`CI` runs on pull requests and pushes to `main` or `master`. It:
+
+1. Checks out the repository.
+2. Sets up Python 3.12.
+3. Installs dependencies from `app/requirements.txt`.
+4. Runs unit tests with `pytest -q`.
+5. Creates `.env` from `.env.example`.
+6. Validates `docker compose config`.
+7. Builds the `tms-api` Docker image.
+8. Builds the `tms-cleanup` Docker image.
+
+`CD` runs on pushes to `main` and can also be started manually from GitHub Actions. It:
+
+1. Logs in to GitHub Container Registry with `GITHUB_TOKEN`.
+2. Builds and pushes the API image:
+
+```text
+ghcr.io/<owner>/tms-api:latest
+ghcr.io/<owner>/tms-api:<commit-sha>
+```
+
+3. Builds and pushes the cleanup image:
+
+```text
+ghcr.io/<owner>/tms-cleanup:latest
+ghcr.io/<owner>/tms-cleanup:<commit-sha>
+```
+
+The CD workflow publishes images. A real server deployment step can be added later when the target host, SSH secrets, and deployment strategy are known.
+
 ## Bonus Cron Cleanup
 
 The `tms-cleanup` service runs in a separate container with a crontab file. Configure the schedule with:
