@@ -49,6 +49,15 @@ Useful endpoints:
 
 - `GET /health`: checks both MySQL and Redis connectivity and returns `503` if either component is degraded
 - `GET /schema/terminals`: runs the schema exploration query from the assignment
+- `GET /terminals`: lists all terminals
+- `GET /terminals?enabled=true`: lists enabled terminals
+- `GET /terminals?enabled=false`: lists decommissioned/disabled terminals
+- `GET /terminals/<tid>`: returns details for one terminal
+- `GET /terminals/flagged`: lists terminals with a non-zero scenario number
+- `POST /terminals/<tid>/flag`: sets `scenario_number` and updates `updated_on`
+- `POST /terminals/<tid>/unflag`: sets `scenario_number` to `0` and updates `updated_on`
+- `POST /terminals/<tid>/decommission`: disables a terminal and queues it for deletion after 3 days
+- `GET /terminals/decommissioned`: lists terminals in the decommission queue
 
 Application logs are written to stdout with timestamp, level, and message.
 
@@ -67,44 +76,53 @@ docker compose up --build
 
 The `mid` field belongs to the `merchants` table. The `terminals` table stores `merchant_id`, which references `merchants.id`; therefore a terminal's MID is retrieved through a join.
 
+On API startup, the app applies the Feature A schema additions idempotently:
 
-## data schema
-mysql -u tms_app -p tms
-Enter password: 
-Reading table information for completion of table and column names
-You can turn off this feature to get a quicker startup with -A
+- Adds `terminals.updated_on` only if the column does not already exist.
+- Creates `decommission_queue` only if the table does not already exist.
 
-Welcome to the MySQL monitor.  Commands end with ; or \g.
-Your MySQL connection id is 72
-Server version: 8.4.10 MySQL Community Server - GPL
+## Feature A Examples
 
-Copyright (c) 2000, 2026, Oracle and/or its affiliates.
+List terminals:
 
-Oracle is a registered trademark of Oracle Corporation and/or its
-affiliates. Other names may be trademarks of their respective
-owners.
+```bash
+curl http://localhost:5000/terminals
+curl "http://localhost:5000/terminals?enabled=true"
+```
 
-Type 'help;' or '\h' for help. Type '\c' to clear the current input statement.
+Terminal details:
 
-mysql> SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE
-    -> FROM INFORMATION_SCHEMA.COLUMNS
-    -> WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'terminals'
-    -> ORDER BY ORDINAL_POSITION;
-+------------------+-----------+-------------+
-| COLUMN_NAME      | DATA_TYPE | IS_NULLABLE |
-+------------------+-----------+-------------+
-| id               | int       | NO          |
-| tid              | varchar   | NO          |
-| merchant_id      | int       | NO          |
-| template_id      | int       | YES         |
-| serial_number    | varchar   | YES         |
-| software_version | varchar   | YES         |
-| sdk_version      | varchar   | YES         |
-| scenario_number  | varchar   | YES         |
-| hardware_model   | varchar   | YES         |
-| hardware_family  | varchar   | YES         |
-| enabled          | tinyint   | NO          |
-| created_on       | datetime  | NO          |
-| last_call_stamp  | datetime  | YES         |
-+------------------+-----------+-------------+
-13 rows in set (0.00 sec)
+```bash
+curl http://localhost:5000/terminals/T0101001
+```
+
+Flag and unflag:
+
+```bash
+curl -X POST http://localhost:5000/terminals/T0101001/flag \
+  -H "Content-Type: application/json" \
+  -d '{"scenario_number":"5"}'
+
+curl -X POST http://localhost:5000/terminals/T0101001/unflag
+```
+
+Decommission:
+
+```bash
+curl -X POST http://localhost:5000/terminals/T0101001/decommission
+curl http://localhost:5000/terminals/decommissioned
+```
+
+
+## Data Schema Check
+
+Use this query to inspect the `terminals` table:
+
+```sql
+SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'terminals'
+ORDER BY ORDINAL_POSITION;
+```
+
+After the API starts, the result includes the assignment seed columns plus the `updated_on` column added by the application migration.
