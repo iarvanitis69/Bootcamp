@@ -5,6 +5,9 @@ Flask API for the Mellon Group DevOps Bootcamp final assignment. The local stack
 - `tms-api`: Flask application built from `app/Dockerfile`
 - `mysql`: official MySQL image with persistent data and automatic schema/seed import
 - `redis`: official Redis image used as the cache layer
+- `tms-cleanup`: crontab-based cleanup worker for expired decommissioned terminals
+
+The Flask entrypoint is `app/main.py`. The cleanup worker uses a crontab entry executed by `supercronic` inside a separate container.
 
 ## Project Layout
 
@@ -14,6 +17,11 @@ Flask API for the Mellon Group DevOps Bootcamp final assignment. The local stack
 │   ├── Dockerfile
 │   ├── main.py
 │   └── requirements.txt
+├── cleanup/
+│   ├── Dockerfile
+│   ├── cleanup.sh
+│   ├── crontab
+│   └── entrypoint.sh
 ├── db/
 │   └── init/
 │       ├── 01_schema.sql
@@ -66,7 +74,7 @@ Useful endpoints:
 - `GET /statistics/by-hardware-family`: terminal count by hardware family
 - `GET /statistics/idle-distribution`: terminal count by idle-days bucket
 
-Application logs are written to stdout with timestamp, level, and message.
+Application logs are written to stdout with timestamp, level, and message. Database and Redis operations are wrapped with explicit error handling and return JSON error responses instead of silent failures.
 
 ## Redis Caching
 
@@ -183,6 +191,131 @@ curl http://localhost:5000/statistics/by-hardware
 curl http://localhost:5000/statistics/by-state
 curl http://localhost:5000/statistics/by-hardware-family
 curl http://localhost:5000/statistics/idle-distribution
+```
+
+## Tests
+
+Run the unit tests with:
+
+```bash
+pytest -q
+```
+
+The tests use fake database and Redis objects, so they do not require Docker containers to be running.
+
+## Bonus Cron Cleanup
+
+The `tms-cleanup` service runs in a separate container with a crontab file. Configure the schedule with:
+
+```dotenv
+CLEANUP_CRON=0 2 * * *
+```
+
+At container startup, `cleanup/entrypoint.sh` writes this crontab line to `/etc/tms-cleanup.generated`:
+
+```cron
+0 2 * * * . /etc/tms-cleanup.env; /usr/local/bin/cleanup.sh >> /proc/1/fd/1 2>> /proc/1/fd/2
+```
+
+The shell script deletes expired rows where `decommission_queue.delete_after < NOW()`. Because `decommission_queue.tid` has a foreign key to `terminals.tid`, it deletes in this order inside one transaction:
+
+1. Delete from `decommission_queue`.
+2. Delete the matching rows from `terminals`.
+
+Run the cleanup once manually for verification:
+
+```bash
+docker compose run --rm -e CLEANUP_ONCE=true tms-cleanup
+```
+
+Inspect the installed crontab file:
+
+```bash
+docker exec tms-cleanup cat /etc/tms-cleanup.generated
+```
+
+Watch cron runner logs:
+
+```bash
+docker compose logs -f tms-cleanup
+```
+
+### Cleanup File Details
+
+`cleanup/Dockerfile`
+
+Builds the image for the cleanup container. It uses the official `mysql:8.4` image so the container has the correct MySQL 8 client and can authenticate against the MySQL server. It downloads `supercronic`, copies the cleanup scripts into the image, and sets `cleanup/entrypoint.sh` as the container entrypoint.
+
+`cleanup/entrypoint.sh`
+
+Runs when the `tms-cleanup` container starts. It creates `/etc/tms-cleanup.env` from Docker environment variables, creates `/etc/tms-cleanup.generated` with the final crontab line, prints that crontab line to stdout, and starts `supercronic`. If `CLEANUP_ONCE=true` is passed, it runs `cleanup.sh` once and exits instead of starting the cron runner.
+
+`cleanup/crontab`
+
+Contains the default crontab line:
+
+```cron
+0 2 * * * . /etc/tms-cleanup.env; /usr/local/bin/cleanup.sh >> /proc/1/fd/1 2>> /proc/1/fd/2
+```
+
+`cleanup/cleanup.sh`
+
+Does the actual cleanup work. It validates required MySQL variables, selects expired TIDs from `decommission_queue`, deletes those rows from `decommission_queue`, then deletes the matching terminals from `terminals`. The delete order matters because `decommission_queue.tid` references `terminals.tid` with a foreign key. The script also clears Redis `tms:*` keys after a successful cleanup.
+
+### Crontab Details
+
+The default schedule is:
+
+```cron
+0 2 * * *
+```
+
+Crontab fields are:
+
+```text
+minute hour day-of-month month day-of-week
+```
+
+So `0 2 * * *` means:
+
+- `0`: at minute 0
+- `2`: at hour 2, meaning 02:00
+- `*`: every day of the month
+- `*`: every month
+- `*`: every day of the week
+
+Therefore the cleanup runs every day at 02:00 inside the cleanup container.
+
+The full generated crontab command is:
+
+```cron
+0 2 * * * . /etc/tms-cleanup.env; /usr/local/bin/cleanup.sh >> /proc/1/fd/1 2>> /proc/1/fd/2
+```
+
+This does three things:
+
+1. `. /etc/tms-cleanup.env` loads the MySQL and Redis environment variables for the cron process.
+2. `/usr/local/bin/cleanup.sh` runs the cleanup script.
+3. `>> /proc/1/fd/1 2>> /proc/1/fd/2` sends stdout and stderr to the container logs, so `docker compose logs tms-cleanup` shows cron output.
+
+The generated environment file contains values like:
+
+```sh
+MYSQL_HOST='mysql'
+MYSQL_PORT='3306'
+MYSQL_DATABASE='tms'
+MYSQL_USER='tms_app'
+MYSQL_PASSWORD='...'
+REDIS_HOST='redis'
+REDIS_PORT='6379'
+REDIS_DB='0'
+```
+
+Inspect the generated files inside the running container:
+
+```bash
+docker exec tms-cleanup cat /etc/tms-cleanup.generated
+docker exec tms-cleanup cat /etc/tms-cleanup.env
 ```
 
 

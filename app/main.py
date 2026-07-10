@@ -96,68 +96,81 @@ def clear_cache(redis_client: redis.Redis) -> None:
 
 
 def dataframe_from_query(query: str, params: dict[str, Any] | None = None) -> pd.DataFrame:
-    result = db.session.execute(text(query), params or {})
-    return pd.DataFrame(result.mappings().all())
+    try:
+        result = db.session.execute(text(query), params or {})
+        return pd.DataFrame(result.mappings().all())
+    except Exception:
+        logger.error("Database dataframe query failed", exc_info=True)
+        raise
 
 
 def ensure_schema() -> None:
-    updated_on_exists = db.session.execute(
-        text(
-            """
-            SELECT COUNT(*) AS count
-            FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME = 'terminals'
-              AND COLUMN_NAME = 'updated_on'
-            """
-        )
-    ).scalar()
-
-    if not updated_on_exists:
-        db.session.execute(text("ALTER TABLE terminals ADD COLUMN updated_on DATETIME NULL"))
-        logger.info("Added terminals.updated_on column")
-
-    db.session.execute(
-        text(
-            """
-            CREATE TABLE IF NOT EXISTS decommission_queue (
-                tid VARCHAR(20) PRIMARY KEY,
-                queued_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                delete_after DATETIME NOT NULL,
-                CONSTRAINT fk_decommission_queue_terminal
-                    FOREIGN KEY (tid) REFERENCES terminals(tid)
+    try:
+        updated_on_exists = db.session.execute(
+            text(
+                """
+                SELECT COUNT(*) AS count
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'terminals'
+                  AND COLUMN_NAME = 'updated_on'
+                """
             )
-            """
+        ).scalar()
+
+        if not updated_on_exists:
+            db.session.execute(text("ALTER TABLE terminals ADD COLUMN updated_on DATETIME NULL"))
+            logger.info("Added terminals.updated_on column")
+
+        db.session.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS decommission_queue (
+                    tid VARCHAR(20) PRIMARY KEY,
+                    queued_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    delete_after DATETIME NOT NULL,
+                    CONSTRAINT fk_decommission_queue_terminal
+                        FOREIGN KEY (tid) REFERENCES terminals(tid)
+                )
+                """
+            )
         )
-    )
-    db.session.commit()
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.error("Database schema migration failed", exc_info=True)
+        raise
 
 
 def create_app() -> Flask:
-    app = Flask(__name__)
+    try:
+        app = Flask(__name__)
 
-    mysql_user = required_env("MYSQL_USER")
-    mysql_password = required_env("MYSQL_PASSWORD")
-    mysql_host = os.getenv("MYSQL_HOST", "mysql")
-    mysql_port = os.getenv("MYSQL_PORT", "3306")
-    mysql_database = required_env("MYSQL_DATABASE")
+        mysql_user = required_env("MYSQL_USER")
+        mysql_password = required_env("MYSQL_PASSWORD")
+        mysql_host = os.getenv("MYSQL_HOST", "mysql")
+        mysql_port = os.getenv("MYSQL_PORT", "3306")
+        mysql_database = required_env("MYSQL_DATABASE")
 
-    app.config["SQLALCHEMY_DATABASE_URI"] = (
-        f"mysql+pymysql://{mysql_user}:{mysql_password}"
-        f"@{mysql_host}:{mysql_port}/{mysql_database}"
-    )
-    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+        app.config["SQLALCHEMY_DATABASE_URI"] = (
+            f"mysql+pymysql://{mysql_user}:{mysql_password}"
+            f"@{mysql_host}:{mysql_port}/{mysql_database}"
+        )
+        app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    db.init_app(app)
+        db.init_app(app)
 
-    redis_client = redis.Redis(
-        host=os.getenv("REDIS_HOST", "redis"),
-        port=int(os.getenv("REDIS_PORT", "6379")),
-        db=int(os.getenv("REDIS_DB", "0")),
-        decode_responses=True,
-        socket_connect_timeout=1,
-        socket_timeout=1,
-    )
+        redis_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "redis"),
+            port=int(os.getenv("REDIS_PORT", "6379")),
+            db=int(os.getenv("REDIS_DB", "0")),
+            decode_responses=True,
+            socket_connect_timeout=1,
+            socket_timeout=1,
+        )
+    except Exception:
+        logger.error("Application initialization failed", exc_info=True)
+        raise
 
     with app.app_context():
         try:
@@ -785,32 +798,34 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index():
-        return jsonify(
-            service="Terminal Management System API",
-            endpoints=[
-                "/health",
-                "/schema/terminals",
-                "/terminals",
-                "/templates",
-                "/templates/<id>",
-                "/terminals/from-template",
-                "/terminals/<tid>",
-                "/terminals/flagged",
-                "/terminals/decommissioned",
-                "/statistics/by-hardware",
-                "/statistics/by-state",
-                "/statistics/by-hardware-family",
-                "/statistics/idle-distribution",
-            ],
-        )
+        try:
+            return jsonify(
+                service="Terminal Management System API",
+                endpoints=[
+                    "/health",
+                    "/schema/terminals",
+                    "/terminals",
+                    "/templates",
+                    "/templates/<id>",
+                    "/terminals/from-template",
+                    "/terminals/<tid>",
+                    "/terminals/flagged",
+                    "/terminals/decommissioned",
+                    "/statistics/by-hardware",
+                    "/statistics/by-state",
+                    "/statistics/by-hardware-family",
+                    "/statistics/idle-distribution",
+                ],
+            )
+        except Exception:
+            logger.error("Index endpoint failed", exc_info=True)
+            return jsonify(error="internal server error"), 500
 
     return app
 
 
-app = create_app()
-
-
 if __name__ == "__main__":
+    app = create_app()
     app.run(
         host=os.getenv("APP_HOST", "0.0.0.0"),
         port=int(os.getenv("APP_PORT", "5000")),

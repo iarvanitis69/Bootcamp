@@ -61,6 +61,25 @@ services:
       redis:
         condition: service_healthy
 
+  tms-cleanup:
+    build:
+      context: ./cleanup
+      dockerfile: Dockerfile
+    container_name: tms-cleanup
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CLEANUP_CRON: ${CLEANUP_CRON:-0 2 * * *}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   mysql_data:
   redis_data:
