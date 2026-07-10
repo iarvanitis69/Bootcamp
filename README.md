@@ -64,6 +64,36 @@ Useful endpoints:
 
 Application logs are written to stdout with timestamp, level, and message.
 
+## Redis Caching
+
+The API uses a cache-aside pattern with Redis. `GET /terminals` is cached for 30 seconds. Cache operations are best-effort: if Redis is unavailable, the API logs the Redis error and continues by reading from MySQL.
+
+Every write endpoint clears the whole application cache before returning:
+
+- `POST /terminals/<tid>/flag`
+- `POST /terminals/<tid>/unflag`
+- `POST /terminals/<tid>/decommission`
+- `POST /terminals/from-template`
+
+To verify cache behavior, watch the API logs:
+
+```bash
+docker compose logs -f tms-api
+```
+
+In another terminal:
+
+```bash
+curl http://localhost:5000/terminals
+curl http://localhost:5000/terminals
+curl -X POST http://localhost:5000/terminals/T0101001/flag \
+  -H "Content-Type: application/json" \
+  -d '{"scenario_number":"5"}'
+curl http://localhost:5000/terminals
+```
+
+The expected log flow is `Cache MISS`, then `Cache HIT`, then cache clear after the write, then `Cache MISS` again.
+
 ## Database Initialization
 
 The SQL files in `db/init/` are mounted to `/docker-entrypoint-initdb.d` inside the MySQL container. The official MySQL image executes them automatically only when the database volume is created for the first time.

@@ -64,7 +64,9 @@ def get_cached_json(redis_client: redis.Redis, key: str) -> Any | None:
     try:
         cached = redis_client.get(key)
         if cached is None:
+            logger.info("Cache MISS %s", key)
             return None
+        logger.info("Cache HIT %s", key)
         return json.loads(cached)
     except Exception:
         logger.error("Redis cache read failed", exc_info=True)
@@ -78,20 +80,12 @@ def set_cached_json(redis_client: redis.Redis, key: str, value: Any, ttl: int = 
         logger.error("Redis cache write failed", exc_info=True)
 
 
-def clear_terminal_cache(redis_client: redis.Redis) -> None:
+def clear_cache(redis_client: redis.Redis) -> None:
     try:
-        keys = list(redis_client.scan_iter(match="tms:terminals*"))
+        keys = list(redis_client.scan_iter(match="tms:*"))
         if keys:
             redis_client.delete(*keys)
-    except Exception:
-        logger.error("Redis cache clear failed", exc_info=True)
-
-
-def clear_template_cache(redis_client: redis.Redis) -> None:
-    try:
-        keys = list(redis_client.scan_iter(match="tms:templates*"))
-        if keys:
-            redis_client.delete(*keys)
+            logger.info("Cleared %s cache keys", len(keys))
     except Exception:
         logger.error("Redis cache clear failed", exc_info=True)
 
@@ -151,6 +145,8 @@ def create_app() -> Flask:
         port=int(os.getenv("REDIS_PORT", "6379")),
         db=int(os.getenv("REDIS_DB", "0")),
         decode_responses=True,
+        socket_connect_timeout=1,
+        socket_timeout=1,
     )
 
     with app.app_context():
@@ -297,7 +293,7 @@ def create_app() -> Flask:
                 params,
             ).mappings()
             result = [terminal_list_row(dict(row)) for row in rows]
-            set_cached_json(redis_client, key, result)
+            set_cached_json(redis_client, key, result, ttl=30)
             return jsonify(result)
         except Exception:
             logger.error("Database terminal list query failed", exc_info=True)
@@ -485,8 +481,7 @@ def create_app() -> Flask:
             )
             db.session.commit()
             logger.info("Created terminal %s from template %s for MID %s", new_tid, template_id, mid)
-            clear_terminal_cache(redis_client)
-            clear_template_cache(redis_client)
+            clear_cache(redis_client)
             return jsonify(tid=new_tid), 201
         except Exception:
             db.session.rollback()
@@ -573,7 +568,7 @@ def create_app() -> Flask:
             )
             db.session.commit()
             logger.info("Flagged terminal %s from %s to %s", tid, old_scenario, new_scenario)
-            clear_terminal_cache(redis_client)
+            clear_cache(redis_client)
             return jsonify(tid=tid, scenario_number=new_scenario)
         except Exception:
             db.session.rollback()
@@ -605,7 +600,7 @@ def create_app() -> Flask:
             )
             db.session.commit()
             logger.info("Unflagged terminal %s from %s to 0", tid, old_scenario)
-            clear_terminal_cache(redis_client)
+            clear_cache(redis_client)
             return jsonify(tid=tid, scenario_number="0")
         except Exception:
             db.session.rollback()
@@ -651,7 +646,7 @@ def create_app() -> Flask:
             )
             db.session.commit()
             logger.info("Decommissioned terminal %s", tid)
-            clear_terminal_cache(redis_client)
+            clear_cache(redis_client)
             return jsonify(tid=tid, enabled=False)
         except Exception:
             db.session.rollback()
