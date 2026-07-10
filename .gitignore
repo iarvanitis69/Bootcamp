@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.py[cod]
+.venv/
+.idea/
+.pytest_cache/
+mysql_data/
+redis_data/
