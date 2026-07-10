@@ -52,6 +52,9 @@ Useful endpoints:
 - `GET /terminals`: lists all terminals
 - `GET /terminals?enabled=true`: lists enabled terminals
 - `GET /terminals?enabled=false`: lists decommissioned/disabled terminals
+- `GET /templates`: lists templates
+- `GET /templates/<id>`: returns one template
+- `POST /terminals/from-template`: creates a terminal from a template and merchant MID
 - `GET /terminals/<tid>`: returns details for one terminal
 - `GET /terminals/flagged`: lists terminals with a non-zero scenario number
 - `POST /terminals/<tid>/flag`: sets `scenario_number` and updates `updated_on`
@@ -112,6 +115,30 @@ Decommission:
 curl -X POST http://localhost:5000/terminals/T0101001/decommission
 curl http://localhost:5000/terminals/decommissioned
 ```
+
+## Feature B Examples
+
+List templates:
+
+```bash
+curl http://localhost:5000/templates
+```
+
+Template details:
+
+```bash
+curl http://localhost:5000/templates/1
+```
+
+Create terminal from template:
+
+```bash
+curl -X POST http://localhost:5000/terminals/from-template \
+  -H "Content-Type: application/json" \
+  -d '{"template_id":1,"mid":"MID000101"}'
+```
+
+The create operation runs in a single database transaction. It validates the template, validates the merchant MID, locks the merchant's existing terminals, calculates the next TID suffix, inserts the new terminal, and returns `201 Created`.
 
 
 ## Data Schema Check

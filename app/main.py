@@ -87,6 +87,15 @@ def clear_terminal_cache(redis_client: redis.Redis) -> None:
         logger.error("Redis cache clear failed", exc_info=True)
 
 
+def clear_template_cache(redis_client: redis.Redis) -> None:
+    try:
+        keys = list(redis_client.scan_iter(match="tms:templates*"))
+        if keys:
+            redis_client.delete(*keys)
+    except Exception:
+        logger.error("Redis cache clear failed", exc_info=True)
+
+
 def ensure_schema() -> None:
     updated_on_exists = db.session.execute(
         text(
@@ -188,6 +197,58 @@ def create_app() -> Flask:
             return jsonify([dict(row) for row in rows])
         except Exception:
             logger.error("Database schema query failed", exc_info=True)
+            return jsonify(error="database error"), 500
+
+    @app.get("/templates")
+    def list_templates():
+        key = cache_key("templates:list")
+        cached = get_cached_json(redis_client, key)
+        if cached is not None:
+            return jsonify(cached)
+
+        try:
+            rows = db.session.execute(
+                text(
+                    """
+                    SELECT id, template_name, hardware_model, hardware_family
+                    FROM templates
+                    ORDER BY id
+                    """
+                )
+            ).mappings()
+            result = [serialize_row(dict(row)) for row in rows]
+            set_cached_json(redis_client, key, result)
+            return jsonify(result)
+        except Exception:
+            logger.error("Database template list query failed", exc_info=True)
+            return jsonify(error="database error"), 500
+
+    @app.get("/templates/<int:template_id>")
+    def template_details(template_id: int):
+        key = cache_key(f"templates:detail:{template_id}")
+        cached = get_cached_json(redis_client, key)
+        if cached is not None:
+            return jsonify(cached)
+
+        try:
+            row = db.session.execute(
+                text(
+                    """
+                    SELECT id, template_name, hardware_model, hardware_family
+                    FROM templates
+                    WHERE id = :template_id
+                    """
+                ),
+                {"template_id": template_id},
+            ).mappings().first()
+            if row is None:
+                return jsonify(error="template not found"), 404
+
+            result = serialize_row(dict(row))
+            set_cached_json(redis_client, key, result)
+            return jsonify(result)
+        except Exception:
+            logger.error("Database template detail query failed", exc_info=True)
             return jsonify(error="database error"), 500
 
     @app.get("/terminals")
@@ -311,6 +372,125 @@ def create_app() -> Flask:
             return jsonify(result)
         except Exception:
             logger.error("Database decommission queue query failed", exc_info=True)
+            return jsonify(error="database error"), 500
+
+    @app.post("/terminals/from-template")
+    def create_terminal_from_template():
+        payload = request.get_json(silent=True) or {}
+        if "template_id" not in payload:
+            return jsonify(error="template_id is required"), 400
+        if "mid" not in payload:
+            return jsonify(error="mid is required"), 400
+
+        try:
+            template_id = int(payload["template_id"])
+        except (TypeError, ValueError):
+            return jsonify(error="template_id must be an integer"), 400
+
+        mid = str(payload["mid"])
+
+        try:
+            template_row = db.session.execute(
+                text(
+                    """
+                    SELECT id, hardware_model, hardware_family
+                    FROM templates
+                    WHERE id = :template_id
+                    """
+                ),
+                {"template_id": template_id},
+            ).mappings().first()
+            if template_row is None:
+                db.session.rollback()
+                return jsonify(error="template not found"), 404
+
+            merchant_row = db.session.execute(
+                text(
+                    """
+                    SELECT id, mid
+                    FROM merchants
+                    WHERE mid = :mid
+                    """
+                ),
+                {"mid": mid},
+            ).mappings().first()
+            if merchant_row is None:
+                db.session.rollback()
+                return jsonify(error="merchant not found"), 404
+
+            terminals = db.session.execute(
+                text(
+                    """
+                    SELECT tid
+                    FROM terminals
+                    WHERE merchant_id = :merchant_id
+                    FOR UPDATE
+                    """
+                ),
+                {"merchant_id": merchant_row["id"]},
+            ).scalars().all()
+
+            if not terminals:
+                db.session.rollback()
+                return jsonify(error="merchant has no terminal prefix to extend"), 400
+
+            prefix = terminals[0][:-3]
+            max_suffix = 0
+            for terminal_tid in terminals:
+                if not terminal_tid.startswith(prefix):
+                    db.session.rollback()
+                    return jsonify(error="merchant terminal prefix is inconsistent"), 500
+                try:
+                    suffix = int(terminal_tid[-3:])
+                except ValueError:
+                    db.session.rollback()
+                    return jsonify(error="terminal suffix is invalid"), 500
+                max_suffix = max(max_suffix, suffix)
+
+            new_tid = f"{prefix}{max_suffix + 1:03d}"
+            db.session.execute(
+                text(
+                    """
+                    INSERT INTO terminals (
+                        tid,
+                        merchant_id,
+                        template_id,
+                        hardware_model,
+                        hardware_family,
+                        enabled,
+                        scenario_number,
+                        created_on,
+                        updated_on
+                    )
+                    VALUES (
+                        :tid,
+                        :merchant_id,
+                        :template_id,
+                        :hardware_model,
+                        :hardware_family,
+                        1,
+                        '0',
+                        NOW(),
+                        NOW()
+                    )
+                    """
+                ),
+                {
+                    "tid": new_tid,
+                    "merchant_id": merchant_row["id"],
+                    "template_id": template_row["id"],
+                    "hardware_model": template_row["hardware_model"],
+                    "hardware_family": template_row["hardware_family"],
+                },
+            )
+            db.session.commit()
+            logger.info("Created terminal %s from template %s for MID %s", new_tid, template_id, mid)
+            clear_terminal_cache(redis_client)
+            clear_template_cache(redis_client)
+            return jsonify(tid=new_tid), 201
+        except Exception:
+            db.session.rollback()
+            logger.error("Database create terminal from template failed", exc_info=True)
             return jsonify(error="database error"), 500
 
     @app.get("/terminals/<tid>")
@@ -486,6 +666,9 @@ def create_app() -> Flask:
                 "/health",
                 "/schema/terminals",
                 "/terminals",
+                "/templates",
+                "/templates/<id>",
+                "/terminals/from-template",
                 "/terminals/<tid>",
                 "/terminals/flagged",
                 "/terminals/decommissioned",
