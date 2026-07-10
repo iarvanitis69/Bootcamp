@@ -237,7 +237,7 @@ ghcr.io/<owner>/tms-cleanup:<commit-sha>
 
 The CD workflow publishes images. A real server deployment step can be added later when the target host, SSH secrets, and deployment strategy are known.
 
-Manual execution from GitHub:
+Manual execution from the GitHub UI:
 
 1. Open the repository on GitHub.
 2. Go to `Actions`.
@@ -359,7 +359,6 @@ Inspect the generated files inside the running container:
 docker exec tms-cleanup cat /etc/tms-cleanup.generated
 docker exec tms-cleanup cat /etc/tms-cleanup.env
 ```
-
 
 ## Data Schema Check
 
