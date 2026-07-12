@@ -41,6 +41,133 @@ cp .env.example .env
 
 Update the password values before running the stack. The real `.env` file is ignored by git.
 
+## Docker Installation
+
+This project requires Docker Engine and the Docker Compose plugin. The commands below follow the official Docker installation flow for Ubuntu.
+
+Remove conflicting distro packages if they exist:
+
+```bash
+for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
+  sudo apt remove "$pkg"
+done
+```
+
+Install prerequisites and add Docker's official apt repository:
+
+```bash
+sudo apt update
+sudo apt install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+```
+
+```bash
+sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+```
+
+Install Docker Engine, Buildx, and Compose:
+
+```bash
+sudo apt update
+sudo apt install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+Verify the installation:
+
+```bash
+sudo systemctl status docker
+docker --version
+docker compose version
+sudo docker run hello-world
+```
+
+If Docker is not running:
+
+```bash
+sudo systemctl start docker
+```
+
+Optional: run Docker without `sudo` by adding your user to the `docker` group:
+
+```bash
+sudo usermod -aG docker "$USER"
+newgrp docker
+docker run hello-world
+```
+
+Official references:
+
+- Docker Engine on Ubuntu: `https://docs.docker.com/engine/install/ubuntu/`
+- Docker Compose plugin: `https://docs.docker.com/compose/install/linux/`
+
+## Build
+
+Build all local images defined in `docker-compose.yml`:
+
+```bash
+docker compose build
+```
+
+Build only the Flask API image:
+
+```bash
+docker compose build tms-api
+```
+
+Build only the cleanup cron image:
+
+```bash
+docker compose build tms-cleanup
+```
+
+Build and start the full stack:
+
+```bash
+docker compose up --build
+```
+
+Run in the background:
+
+```bash
+docker compose up --build -d
+```
+
+Check running containers:
+
+```bash
+docker compose ps
+```
+
+Watch logs:
+
+```bash
+docker compose logs -f
+docker compose logs -f tms-api
+docker compose logs -f tms-cleanup
+```
+
+Stop the stack while preserving MySQL and Redis volumes:
+
+```bash
+docker compose down
+```
+
+Reset the database and re-run the SQL seed files from `db/init/`:
+
+```bash
+docker compose down -v
+docker compose up --build
+```
+
 ## Run
 
 ```bash
