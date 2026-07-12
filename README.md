@@ -1,5 +1,7 @@
 # Terminal Management System
 
+Author: Arvanitis Ioannis, Mellon Technologies employee
+
 Flask API for the Mellon Group DevOps Bootcamp final assignment. The local stack runs with Docker Compose and includes:
 
 - `tms-api`: Flask application built from `app/Dockerfile`
